@@ -28,6 +28,87 @@
 - `foreach`、`if` 等语句块不能直接作为管道输入，需用 `$()` / `@()` 包裹或先赋给变量
 - 禁止试错机制：只输出符合当前 Shell 语法的纯命令
 
+## 效果对比（测试用例）
+
+以下每个用例都展示：**同一个任务**，未注入提示词时 AI 会给出的输出（在 PowerShell 里会出错），以及注入提示词后的正确输出。
+
+### 用例 1：多行 Python 脚本
+
+**任务**：用 Python 输出一段 JSON。
+
+**❌ 未注入**（Bash heredoc，PowerShell 直接报错）：
+```bash
+python3 <<EOF
+import json
+print(json.dumps({"a": 1}))
+EOF
+```
+
+**✅ 注入后**（PowerShell here-string）：
+```powershell
+@"
+import json
+print(json.dumps({"a": 1}))
+"@ | python -
+```
+
+### 用例 2：链式执行（Windows PowerShell 5.1）
+
+**任务**：进入项目目录，构建成功后跑测试，失败则退出。
+
+**❌ 未注入**（5.1 不支持 `&&`）：
+```bash
+cd project && npm run build && npm test
+```
+
+**✅ 注入后**（用 `;` 分隔，再用 `if` 判断退出码）：
+```powershell
+cd project; npm run build; if ($LASTEXITCODE -eq 0) { npm test }
+```
+
+### 用例 3：rg 递归搜索通配目录
+
+**任务**：在 `src` 下递归搜索所有 `.ts` 文件里的 `TODO`。
+
+**❌ 未注入**（通配符不会像 Bash 那样递归展开）：
+```bash
+rg "TODO" src/**/*.ts
+```
+
+**✅ 注入后**（先用 `Get-ChildItem -Filter` 展开，再交给 rg）：
+```powershell
+Get-ChildItem -Path src -Filter *.ts -Recurse | rg "TODO"
+```
+
+### 用例 4：foreach 块进管道
+
+**任务**：遍历进程，只保留名字含 `node` 的。
+
+**❌ 未注入**（语句块不能直接作为管道输入，语法错误）：
+```powershell
+foreach ($p in Get-Process) { $p.Name } | Where-Object { $_ -like "*node*" }
+```
+
+**✅ 注入后**（先赋值给变量，再进管道）：
+```powershell
+$names = foreach ($p in Get-Process) { $p.Name }
+$names | Where-Object { $_ -like "*node*" }
+```
+
+### 用例 5：三元运算符（Windows PowerShell 5.1）
+
+**任务**：根据计数是否大于 0 输出 `yes` / `no`。
+
+**❌ 未注入**（5.1 不支持三元运算符）：
+```powershell
+$result = $count -gt 0 ? "yes" : "no"
+```
+
+**✅ 注入后**（用 `if` / `else` 替代）：
+```powershell
+if ($count -gt 0) { $result = "yes" } else { $result = "no" }
+```
+
 ## 输出示例（Windows 11 / PowerShell 7 / 7.6.5）
 
 ```text
@@ -50,5 +131,10 @@ PowerShell 7 的绝对路径是：C:\Program Files\PowerShell\7\pwsh.exe
 prompt4powershell/
 ├── prompt-template.md   # 核心模板（唯一需要编辑的文件）
 ├── README.md            # 本说明
+├── LICENSE              # MIT 开源协议
 └── AGENTS.md            # 面向 AI agent 的仓库说明
 ```
+
+## License
+
+[MIT](./LICENSE)
