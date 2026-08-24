@@ -167,9 +167,45 @@ $result = $count -gt 0 ? "yes" : "no"
 if ($count -gt 0) { $result = "yes" } else { $result = "no" }
 ```
 
+#### 用例 6：`rg` 通配目录 `**`
+
+**任务**：在 `src` 下递归搜索所有 `.ts` 文件里的 `TODO`。目录结构：
+
+```text
+src/
+├── a.ts          # 含 TODO
+└── sub/
+    └── b.ts      # 含 TODO
+```
+
+**❌ 未注入** —— AI 默认写 Bash 风格的 `**` 通配：
+
+```bash
+rg "TODO" src/**/*.ts
+```
+
+**💥 实测结果**：PowerShell 不做通配展开，`src/**/*.ts` 被原样传给 rg，直接报错：
+
+```text
+src/**/*.ts: 文件名、目录名或卷标语法不正确。 (os error 123)
+```
+
+**✅ 注入后** —— 先用 `Get-ChildItem -Filter` 展开，再把文件列表交给 rg：
+
+```powershell
+rg "TODO" (Get-ChildItem -Path src -Filter *.ts -Recurse).FullName
+```
+
+**✅ 实测结果**：搜到 **2 条**，一个不落：
+
+```text
+src\sub\b.ts:TODO
+src\a.ts:TODO
+```
+
 ### ② 静默出错型 —— 能跑、不报错，但结果悄悄错了（最危险）
 
-#### 用例 6：`$PATH` 变量不存在
+#### 用例 7：`$PATH` 变量不存在
 
 **任务**：查看 `PATH` 环境变量。
 
@@ -188,42 +224,6 @@ echo $env:PATH
 ```
 
 **✅ 实测结果**：输出真实路径，如 `C:\Windows\system32;C:\Windows;...`
-
-#### 用例 7：`rg` 通配目录静默漏文件
-
-**任务**：在 `src` 下递归搜索所有 `.ts` 文件里的 `TODO`。目录结构：
-
-```text
-src/
-├── a.ts          # 含 TODO
-└── sub/
-    └── b.ts      # 含 TODO
-```
-
-**❌ 未注入** —— AI 默认写 Bash 风格的 `**` 通配：
-
-```bash
-rg "TODO" src/**/*.ts
-```
-
-**💥 实测结果**：只搜到 **1 条**，顶层的 `src/a.ts` 被**静默漏掉**，没有任何报错：
-
-```text
-src\sub\b.ts:TODO
-```
-
-**✅ 注入后** —— 先用 `Get-ChildItem -Filter` 展开，再把文件列表交给 rg：
-
-```powershell
-rg "TODO" (Get-ChildItem -Path src -Filter *.ts -Recurse).FullName
-```
-
-**✅ 实测结果**：搜到 **2 条**，一个不落：
-
-```text
-src\sub\b.ts:TODO
-src\a.ts:TODO
-```
 
 ### ③ 试错成本型 —— 同样的活，多花好几轮
 
@@ -253,6 +253,16 @@ AI  ：@"
       "@ | python -
 ```
 
+## 一键实测（compare.ps1）
+
+仓库自带脚本 `compare.ps1`，会在本机真实跑完上面全部用例，自动输出 ×/√ 对照表，并贴出真实报错 / 真实输出：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File compare.ps1
+```
+
+脚本会自动探测本机的 PowerShell 版本、`python`、`rg`；缺失依赖或不适用的用例（例如本机是 PowerShell 7 时跳过 `&&` / 三元用例）会自动跳过。
+
 ## 输出示例（Windows 11 / PowerShell 7 / 7.6.5）
 
 ```text
@@ -274,6 +284,7 @@ PowerShell 7 的绝对路径是：C:\Program Files\PowerShell\7\pwsh.exe
 ```
 prompt4powershell/
 ├── prompt-template.md   # 核心模板（唯一需要编辑的文件）
+├── compare.ps1          # 一键实测脚本（本机跑完所有用例输出对照表）
 ├── README.md            # 本说明
 ├── LICENSE              # MIT 开源协议
 └── AGENTS.md            # 面向 AI agent 的仓库说明
