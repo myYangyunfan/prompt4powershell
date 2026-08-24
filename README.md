@@ -30,13 +30,41 @@
 
 ## 效果对比（测试用例）
 
-以下每个用例都展示：**同一个任务**，未注入提示词时 AI 会给出的输出（在 PowerShell 里会出错），以及注入提示词后的正确输出。
+下面的用例都在 **Windows PowerShell 5.1（中文系统）** 上实测过，每个都贴出**真实输出**：同一个任务，未注入提示词时 AI 给什么、跑成什么样，注入后给什么、跑成什么样。差距一眼可见、可复现。
 
-### 用例 1：多行 Python 脚本
+### ① 直接报错型 —— 一眼看出跑不了
 
-**任务**：用 Python 输出一段 JSON。
+#### 用例 1：链式执行 `&&`（Windows PowerShell 5.1）
 
-**❌ 未注入**（Bash heredoc，PowerShell 直接报错）：
+**任务**：进入 `project` 目录，构建成功后跑测试。
+
+**❌ 未注入** —— AI 默认给 Bash 链式语法：
+
+```bash
+cd project && npm run build && npm test
+```
+
+**💥 实测结果**（5.1 直接报错，命令根本没执行）：
+
+```text
+所在位置 行:1 字符: 12
++ cd project && npm run build && npm test
++            ~~
+标记“&&”不是此版本中的有效语句分隔符。
+```
+
+**✅ 注入后** —— 用 `;` 分隔，`if` 判断退出码：
+
+```powershell
+cd project; npm run build; if ($LASTEXITCODE -eq 0) { npm test }
+```
+
+#### 用例 2：多行 Python 脚本
+
+**任务**：用 Python 打印一段 JSON。
+
+**❌ 未注入** —— AI 默认给 Bash heredoc：
+
 ```bash
 python3 <<EOF
 import json
@@ -44,7 +72,15 @@ print(json.dumps({"a": 1}))
 EOF
 ```
 
-**✅ 注入后**（PowerShell here-string）：
+**💥 实测结果**：
+
+```text
+重定向运算符后面缺少文件规范。
+“<”运算符是为将来使用而保留的。
+```
+
+**✅ 注入后** —— PowerShell here-string 管道传给 `python -`：
+
 ```powershell
 @"
 import json
@@ -52,61 +88,169 @@ print(json.dumps({"a": 1}))
 "@ | python -
 ```
 
-### 用例 2：链式执行（Windows PowerShell 5.1）
+**✅ 实测结果**：
 
-**任务**：进入项目目录，构建成功后跑测试，失败则退出。
+```text
+{"a": 1}
+```
 
-**❌ 未注入**（5.1 不支持 `&&`）：
+#### 用例 3：设置环境变量 `export`
+
+**任务**：往 `PATH` 里追加一个目录。
+
+**❌ 未注入** —— AI 默认给 Bash 的 `export`：
+
 ```bash
-cd project && npm run build && npm test
+export PATH=$PATH:/opt/tools
 ```
 
-**✅ 注入后**（用 `;` 分隔，再用 `if` 判断退出码）：
+**💥 实测结果**：
+
+```text
+变量引用无效。':' 后面的变量名称字符无效。请考虑使用 ${} 分隔名称。
+```
+
+**✅ 注入后** —— PowerShell 变量语法：
+
 ```powershell
-cd project; npm run build; if ($LASTEXITCODE -eq 0) { npm test }
+$env:PATH = "$env:PATH;C:\tools"
 ```
 
-### 用例 3：rg 递归搜索通配目录
+#### 用例 4：`foreach` 语句块进管道
 
-**任务**：在 `src` 下递归搜索所有 `.ts` 文件里的 `TODO`。
+**任务**：遍历进程，只保留名字含 `win` 的。
 
-**❌ 未注入**（通配符不会像 Bash 那样递归展开）：
-```bash
-rg "TODO" src/**/*.ts
-```
+**❌ 未注入** —— AI 把 `foreach` 块直接接到管道：
 
-**✅ 注入后**（先用 `Get-ChildItem -Filter` 展开，再交给 rg）：
 ```powershell
-Get-ChildItem -Path src -Filter *.ts -Recurse | rg "TODO"
+foreach ($p in Get-Process) { $p.Name } | Where-Object { $_ -like "*win*" }
 ```
 
-### 用例 4：foreach 块进管道
+**💥 实测结果**：
 
-**任务**：遍历进程，只保留名字含 `node` 的。
-
-**❌ 未注入**（语句块不能直接作为管道输入，语法错误）：
-```powershell
-foreach ($p in Get-Process) { $p.Name } | Where-Object { $_ -like "*node*" }
+```text
+所在位置 行:1 字符: 41
++ foreach ($p in Get-Process) { $p.Name } | Where-Object { $_ -like "*w ...
++                                         ~
+不允许使用空管道元素。
 ```
 
-**✅ 注入后**（先赋值给变量，再进管道）：
+**✅ 注入后** —— 先赋值给变量再进管道：
+
 ```powershell
 $names = foreach ($p in Get-Process) { $p.Name }
-$names | Where-Object { $_ -like "*node*" }
+$names | Where-Object { $_ -like "*win*" }
 ```
 
-### 用例 5：三元运算符（Windows PowerShell 5.1）
+#### 用例 5：三元运算符（Windows PowerShell 5.1）
 
 **任务**：根据计数是否大于 0 输出 `yes` / `no`。
 
-**❌ 未注入**（5.1 不支持三元运算符）：
+**❌ 未注入** —— AI 默认用三元运算符：
+
 ```powershell
 $result = $count -gt 0 ? "yes" : "no"
 ```
 
-**✅ 注入后**（用 `if` / `else` 替代）：
+**💥 实测结果**：
+
+```text
+所在位置 行:1 字符: 34
++ $result = $count -gt 0 ? "yes" : "no"
++                                  ~
+表达式或语句中包含意外的标记“?”。
+```
+
+**✅ 注入后** —— 用 `if` / `else` 替代：
+
 ```powershell
 if ($count -gt 0) { $result = "yes" } else { $result = "no" }
+```
+
+### ② 静默出错型 —— 能跑、不报错，但结果悄悄错了（最危险）
+
+#### 用例 6：`$PATH` 变量不存在
+
+**任务**：查看 `PATH` 环境变量。
+
+**❌ 未注入** —— AI 按 Bash 习惯写 `$PATH`：
+
+```powershell
+echo $PATH
+```
+
+**💥 实测结果**：**什么都不输出**。PowerShell 里 `$PATH` 是未定义变量，静默吞掉，不报任何错——你以为命令正常执行了。
+
+**✅ 注入后** —— 用 `$env:` 作用域：
+
+```powershell
+echo $env:PATH
+```
+
+**✅ 实测结果**：输出真实路径，如 `C:\Windows\system32;C:\Windows;...`
+
+#### 用例 7：`rg` 通配目录静默漏文件
+
+**任务**：在 `src` 下递归搜索所有 `.ts` 文件里的 `TODO`。目录结构：
+
+```text
+src/
+├── a.ts          # 含 TODO
+└── sub/
+    └── b.ts      # 含 TODO
+```
+
+**❌ 未注入** —— AI 默认写 Bash 风格的 `**` 通配：
+
+```bash
+rg "TODO" src/**/*.ts
+```
+
+**💥 实测结果**：只搜到 **1 条**，顶层的 `src/a.ts` 被**静默漏掉**，没有任何报错：
+
+```text
+src\sub\b.ts:TODO
+```
+
+**✅ 注入后** —— 先用 `Get-ChildItem -Filter` 展开，再把文件列表交给 rg：
+
+```powershell
+rg "TODO" (Get-ChildItem -Path src -Filter *.ts -Recurse).FullName
+```
+
+**✅ 实测结果**：搜到 **2 条**，一个不落：
+
+```text
+src\sub\b.ts:TODO
+src\a.ts:TODO
+```
+
+### ③ 试错成本型 —— 同样的活，多花好几轮
+
+#### 用例 8：一次到位 vs 反复试错
+
+**任务**：让 AI 用 Python 打印一段 JSON。
+
+**❌ 未注入** —— 典型对话，来回 3~4 轮才出正确命令：
+
+```text
+用户：用 Python 打印一段 JSON
+AI  ：python3 <<EOF
+      import json; print(json.dumps({"a": 1}))
+      EOF
+用户：报错了
+AI  ：抱歉，PowerShell 里应该用 here-string：@"..."@ | python -
+用户：这回对了
+```
+
+**✅ 注入后** —— 一次到位：
+
+```text
+用户：用 Python 打印一段 JSON
+AI  ：@"
+      import json
+      print(json.dumps({"a": 1}))
+      "@ | python -
 ```
 
 ## 输出示例（Windows 11 / PowerShell 7 / 7.6.5）
